@@ -68,7 +68,7 @@ static void dns_msg_init(struct dns_msg *self, size_t len_raw)
 
 	self->_len_raw = len_raw;
 
-	self->malformed = false;
+	self->malformed = 0u;
 }
 
 /** Parses DNS header */
@@ -95,7 +95,7 @@ static bool _dns_msg_parse_name_entry(struct dns_msg *self, uint8_t *data)
 	uint16_t len_full = 1u + (uint16_t)len;
 
 	/* Last entry always has zero length */
-	bool last_entry = data[len];
+	bool last_entry = (len == 0u);
 
 	if (((self->_ofs + len_full) > self->_len_raw) ||
 	    ((self->_len_name + len + 1u) > 64u)) {
@@ -154,4 +154,18 @@ static void dns_msg_parse_query(struct dns_msg *self, uint8_t *data)
 			self->_ofs += 4u;
 		}
 	};
+}
+
+/** Gets DNS query type */
+static const char *dns_msg_get_type_str(struct dns_msg *self)
+{
+	const char *result = "OTHER";
+
+	if (self->query_type == 28u) {
+		result = "AAAA (IPv6)";
+	} else if (self->query_type == 1u) {
+		result = "A (IPv4)";
+	} else {}
+
+	return result;
 }
