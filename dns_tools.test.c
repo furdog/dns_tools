@@ -18,10 +18,8 @@ void test_dns_parsing_standard(void)
 		0x00, 0x01, 0x00, 0x01  /* Type A, Class IN */
 	};
 
-	dns_msg_init(&msg);
-	msg.len_raw = sizeof(mock_pkt);
-	
-	dns_msg_parse(&msg, mock_pkt);
+	dns_msg_init(&msg, sizeof(mock_pkt));	
+	dns_msg_parse_query(&msg, mock_pkt);
 
 	if (msg.malformed) {
 		printf("Test Failed: Packet marked malformed at line %u\n",

@@ -1,3 +1,33 @@
+/**
+ * @file dns_tools.h
+ * @brief Various DNS tools to parse and generate DNS queries/answers
+ * 	(Hardware-Agnostic)
+ *
+ * This file contains the software implementation of the DNS parsing logic.
+ * The design is hardware-agnostic, requiring an external adaptation layer
+ * for hardware interaction.
+ *
+ * **Conventions:**
+ * C89, Linux kernel style, MISRA, rule of 10, No hardware specific code,
+ * only generic C and some binding layer. Be extra specific about types.
+ *
+ * Scientific units where posible at end of the names, for example:
+ * - timer_10s (timer_10s has a resolution of 10s per bit)
+ * - power_150w (power 150W per bit or 0.15kw per bit)
+ *
+ * Keep variables without units if they're unknown or not specified or hard
+ * to define with short notation.
+ *
+ * ```LICENSE
+ * Copyright (c) 2025 furdog <https://github.com/furdog>
+ *
+ * SPDX-License-Identifier: 0BSD
+ * ```
+ *
+ * Be free, be wise and take care of yourself!
+ * With best wishes and respect, furdog
+ */
+
 #pragma once
 
 #include <stdbool.h>
@@ -7,47 +37,50 @@
 /*****************************************************************************
  * DNS TOOLS
  *****************************************************************************/
-struct dns_msg {
-	char    name[64];
-	uint8_t len_name;
 
-	uint16_t query_type;
-	uint16_t query_class;
+/** DNS message state machine. Responsible for query parsing */
+struct dns_msg {
+	char     name[64]; /**< Domain name string in aaa.bbb.ccc form */
+	uint8_t _len_name; /**< Length of domain name */
+
+	uint16_t query_type;  /**< DNS query type */
+	uint16_t query_class; /**< DNS query class */
 
 	/** Raw (UDP) packet len */
-	size_t len_raw;
+	size_t _len_raw;
 
 	/** Offset inside packet (when actively parsing) */
-	size_t ofs;
+	size_t _ofs;
 
-	/** Set to true if something is not right */
+	/** Set to __LINE__ if something is not right */
 	uint32_t malformed;
 };
 
-static void dns_msg_init(struct dns_msg *self)
+/** Initializes DNS message FSM */
+static void dns_msg_init(struct dns_msg *self, size_t len_raw)
 {
-	self->len_name = 0u;
+	self->_len_name = 0u;
 
 	self->query_type  = 0u;
 	self->query_class = 0u;
 
-	self->ofs = 0u;
+	self->_ofs = 0u;
 
-	self->len_raw = 0u;
+	self->_len_raw = len_raw;
 
 	self->malformed = false;
 }
 
 /** Parses DNS header */
-static void dns_msg_parse_hdr(struct dns_msg *self, uint8_t *data)
+static void _dns_msg_parse_hdr(struct dns_msg *self, uint8_t *data)
 {
 	(void)data;
 
-	if ((self->len_raw < 12u) || (self->ofs != 0u)) {
+	if ((self->_len_raw < 12u) || (self->_ofs != 0u)) {
 		/* Can't exceed msg len */
 		self->malformed = __LINE__;
 	} else {
-		self->ofs = 12;
+		self->_ofs = 12;
 	}
 }
 
@@ -55,67 +88,70 @@ static void dns_msg_parse_hdr(struct dns_msg *self, uint8_t *data)
  *  Returns true if it's last entry, or if it's malformed.
  *  DNS name list has the following binary format: [len]text[len]text...[0]
  *  	where [len] is a single byte and text is ASCII encoded text */
-static bool dns_msg_parse_name_entry(struct dns_msg *self, uint8_t *data)
+static bool _dns_msg_parse_name_entry(struct dns_msg *self, uint8_t *data)
 {
 	/* Single list entry length */
-	uint8_t  len = data[self->ofs];
+	uint8_t  len = data[self->_ofs];
 	uint16_t len_full = 1u + (uint16_t)len;
 
 	/* Last entry always has zero length */
 	bool last_entry = data[len];
 
-	if (((self->ofs + len_full) > self->len_raw) ||
-	    ((self->len_name + len + 1u) > 64u)) {
+	if (((self->_ofs + len_full) > self->_len_raw) ||
+	    ((self->_len_name + len + 1u) > 64u)) {
 		self->malformed = __LINE__;
 	} else {		
 		uint8_t i;
 
-		self->ofs += 1u; /* Skip len byte */
+		self->_ofs += 1u; /* Skip len byte */
 
 		/* Append dot into name */
-		if (!last_entry && (self->len_name > 0u)) {
-			self->name[self->len_name] = '.';
-			self->len_name++;
+		if (!last_entry && (self->_len_name > 0u)) {
+			self->name[self->_len_name] = '.';
+			self->_len_name++;
 		}
 
 		/* Appends entry into readable form string */
 		for (i = 0; i < len; i++) {
-			self->name[self->len_name] = data[self->ofs];
+			self->name[self->_len_name] = data[self->_ofs];
 
 			/* Advance to the next byte */
-			self->ofs++;
-			self->len_name++;
+			self->_ofs++;
+			self->_len_name++;
 		}
 	}
 
 	/* Insert null terminator at the end of last entry */
 	if (last_entry) {
-		self->name[self->len_name] = '\0';
+		self->name[self->_len_name] = '\0';
 	}
 
 	return last_entry || self->malformed;
 }
 
-static void dns_msg_parse(struct dns_msg *self, uint8_t *data) {
+/** Parse DNS message. Stores query_type, query_class and DNS name.
+ * `malformed` will be nonzero in case of critical fault */
+static void dns_msg_parse_query(struct dns_msg *self, uint8_t *data)
+{
 	/* Parse header */
-	dns_msg_parse_hdr(self, data);
+	_dns_msg_parse_hdr(self, data);
 
 	if (self->malformed == 0u) {
 		/* Parse all entries */
-		while (dns_msg_parse_name_entry(self, data) != true) {};
+		while (_dns_msg_parse_name_entry(self, data) != true) {};
 	}
 
 	if (self->malformed == 0u) {
 		/* Parse query type and class */
-		if ((self->ofs + 4u) > self->len_raw) {
+		if ((self->_ofs + 4u) > self->_len_raw) {
 			self->malformed = __LINE__;
 		} else {
-			self->query_type  = (data[self->ofs + 0u] << 8) |
-					    (data[self->ofs + 1u] << 0);
-			self->query_class = (data[self->ofs + 2u] << 8) |
-					    (data[self->ofs + 3u] << 0);
+			self->query_type  = (data[self->_ofs + 0u] << 8) |
+					    (data[self->_ofs + 1u] << 0);
+			self->query_class = (data[self->_ofs + 2u] << 8) |
+					    (data[self->_ofs + 3u] << 0);
 
-			self->ofs += 4u;
+			self->_ofs += 4u;
 		}
 	};
 }
