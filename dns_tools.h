@@ -33,21 +33,23 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 
 /*****************************************************************************
  * DNS TOOLS
  *****************************************************************************/
-
 /** DNS message state machine. Responsible for query parsing */
 struct dns_msg {
+	uint8_t *data; /**< Pointer to original data buffer */
+
 	char     name[64]; /**< Domain name string in aaa.bbb.ccc form */
-	uint8_t _len_name; /**< Length of domain name */
+	uint8_t _name_len; /**< Length of domain name */
 
 	uint16_t query_type;  /**< DNS query type */
 	uint16_t query_class; /**< DNS query class */
 
-	/** Raw (UDP) packet len */
-	size_t _len_raw;
+	size_t _packet_cap; /** Raw (UDP) packet capacity */
+	size_t _packet_len; /** Raw (UDP) packet length */
 
 	/** Offset inside packet (when actively parsing) */
 	size_t _ofs;
@@ -57,16 +59,19 @@ struct dns_msg {
 };
 
 /** Initializes DNS message FSM */
-static void dns_msg_init(struct dns_msg *self, size_t len_raw)
+static void dns_msg_init(struct dns_msg *self, size_t max_data_len)
 {
-	self->_len_name = 0u;
+	self->data      = NULL;
+
+	self->_name_len = 0u;
 
 	self->query_type  = 0u;
 	self->query_class = 0u;
 
 	self->_ofs = 0u;
 
-	self->_len_raw = len_raw;
+	self->_packet_cap = max_data_len;
+	self->_packet_len = 0u;
 
 	self->malformed = 0u;
 }
@@ -76,7 +81,7 @@ static void _dns_msg_parse_hdr(struct dns_msg *self, uint8_t *data)
 {
 	(void)data;
 
-	if ((self->_len_raw < 12u) || (self->_ofs != 0u)) {
+	if ((self->_packet_len < 12u) || (self->_ofs != 0u)) {
 		/* Can't exceed msg len */
 		self->malformed = __LINE__;
 	} else {
@@ -97,8 +102,8 @@ static bool _dns_msg_parse_name_entry(struct dns_msg *self, uint8_t *data)
 	/* Last entry always has zero length */
 	bool last_entry = (len == 0u);
 
-	if (((self->_ofs + len_full) > self->_len_raw) ||
-	    ((self->_len_name + len + 1u) > 64u)) {
+	if (((self->_ofs + len_full) > self->_packet_len) ||
+	    ((self->_name_len + len + 1u) > 64u)) {
 		self->malformed = __LINE__;
 	} else {		
 		uint8_t i;
@@ -106,24 +111,24 @@ static bool _dns_msg_parse_name_entry(struct dns_msg *self, uint8_t *data)
 		self->_ofs += 1u; /* Skip len byte */
 
 		/* Append dot into name */
-		if (!last_entry && (self->_len_name > 0u)) {
-			self->name[self->_len_name] = '.';
-			self->_len_name++;
+		if (!last_entry && (self->_name_len > 0u)) {
+			self->name[self->_name_len] = '.';
+			self->_name_len++;
 		}
 
 		/* Appends entry into readable form string */
 		for (i = 0; i < len; i++) {
-			self->name[self->_len_name] = data[self->_ofs];
+			self->name[self->_name_len] = data[self->_ofs];
 
 			/* Advance to the next byte */
 			self->_ofs++;
-			self->_len_name++;
+			self->_name_len++;
 		}
 	}
 
 	/* Insert null terminator at the end of last entry */
 	if (last_entry) {
-		self->name[self->_len_name] = '\0';
+		self->name[self->_name_len] = '\0';
 	}
 
 	return last_entry || self->malformed;
@@ -131,8 +136,14 @@ static bool _dns_msg_parse_name_entry(struct dns_msg *self, uint8_t *data)
 
 /** Parse DNS message. Stores query_type, query_class and DNS name.
  * `malformed` will be nonzero in case of critical fault */
-static void dns_msg_parse_query(struct dns_msg *self, uint8_t *data)
+static void dns_msg_parse_query(struct dns_msg *self, uint8_t *data,
+				size_t len)
 {
+	self->data = data;
+
+	/* Set maximum packet length */
+	self->_packet_len = len;
+
 	/* Parse header */
 	_dns_msg_parse_hdr(self, data);
 
@@ -143,7 +154,7 @@ static void dns_msg_parse_query(struct dns_msg *self, uint8_t *data)
 
 	if (self->malformed == 0u) {
 		/* Parse query type and class */
-		if ((self->_ofs + 4u) > self->_len_raw) {
+		if ((self->_ofs + 4u) > self->_packet_len) {
 			self->malformed = __LINE__;
 		} else {
 			self->query_type  = (data[self->_ofs + 0u] << 8) |
@@ -153,7 +164,32 @@ static void dns_msg_parse_query(struct dns_msg *self, uint8_t *data)
 
 			self->_ofs += 4u;
 		}
-	};
+	}
+}
+
+/** Adds answer to buffer that was derived from query parser.
+ *  Returns total number of answer bytes (basically raw UDP payload length) */
+size_t dns_msg_add_answer(struct dns_msg *self, uint8_t *answer, size_t len)
+{
+	size_t total_len = (self->_ofs + len);
+
+	if ((total_len > self->_packet_cap) || (self->data == NULL)) {
+		self->malformed = __LINE__;
+		total_len = 0u;
+	}
+
+	if (self->malformed == 0u) {
+		/* Standard Response Logic */
+		self->data[2] = 0x81;
+		self->data[3] = 0x80; /* Standard Response */
+
+		self->data[6] = 0;
+		self->data[7] = 1; /* 1 Answer */
+            
+		(void)memcpy(&self->data[self->_ofs], answer, len);
+        }
+
+	return total_len;
 }
 
 /** Gets DNS query type */
