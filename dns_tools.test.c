@@ -26,8 +26,8 @@ void test_dns_parsing_standard(void)
 		0x00, 0x01, 0x00, 0x01  /* Type A, Class IN */
 	};
 
-	dns_msg_init(&msg, sizeof(mock_pkt));
-	dns_msg_parse_query(&msg, mock_pkt, sizeof(mock_pkt));
+	dns_msg_init(&msg, mock_pkt, sizeof(mock_pkt));
+	dns_msg_parse_query(&msg, sizeof(mock_pkt));
 
 	if (msg.malformed) {
 		printf("Test Failed: Packet marked malformed at line %u\n",
@@ -44,8 +44,8 @@ void test_dns_parsing_standard(void)
 		printf("Type %s\n", dns_msg_get_type_str(&msg));
 	}
 
-	dns_msg_init(&msg, sizeof(sample_query2));
-	dns_msg_parse_query(&msg, sample_query2, sizeof(sample_query2));
+	dns_msg_init(&msg, sample_query2, sizeof(sample_query2));
+	dns_msg_parse_query(&msg, sizeof(sample_query2));
 
 	if (msg.malformed) {
 		printf("Test Failed: Packet marked malformed at line %u\n",
